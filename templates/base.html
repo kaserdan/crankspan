@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="cs" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Crankspan - Bike Wear Tracker{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .strava-orange { background-color: #FC5200; }
+    .strava-orange-hover:hover { background-color: #E04800; }
+  </style>
+</head>
+<body class="h-full flex flex-col font-sans">
+  <!-- Navbar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <span class="text-2xl font-black tracking-wider text-orange-500">⚙️ CRANKSPAN</span>
+        <span class="text-xs uppercase tracking-widest text-slate-400 border border-slate-700 px-2 py-0.5 rounded">Gear & Wear</span>
+      </div>
+      <div>
+        {% if user %}
+          <div class="flex items-center space-x-4">
+            <span class="text-sm font-medium text-slate-300">{{ user.firstname }} {{ user.lastname }}</span>
+            {% if user.profile_picture %}
+              <img src="{{ user.profile_picture }}" alt="Profile" class="w-8 h-8 rounded-full border border-slate-700">
+            {% endif %}
+            <a href="/logout" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 transition">Odhlásit</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer with Strava Attribution -->
+  <footer class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
+    <div class="flex flex-col items-center justify-center space-y-2">
+      <p>Crankspan — Privátní deterministické sledování opotřebení cyklo komponentů.</p>
+      <div class="flex items-center space-x-2">
+        <span class="font-medium text-slate-400">Powered by</span>
+        <span class="text-orange-500 font-bold tracking-wide">STRAVA</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
