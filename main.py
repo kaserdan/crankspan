@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import os
 
 from models import init_db, async_session, User, Bike, Component
-from config import STRAVA_CLIENT_ID, APP_BASE_URL
-from strava import exchange_code_for_token, sync_athlete_bikes, sync_recent_activities
+from config import STRAVA_CLIENT_ID, APP_BASE_URL, STRAVA_WEBHOOK_VERIFY_TOKEN
+from strava import exchange_code_for_token, sync_athlete_bikes, sync_recent_activities, process_single_activity
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -312,3 +312,49 @@ async def delete_component(comp_id: int, user: User | None = Depends(get_current
     await db.commit()
 
     return RedirectResponse(url=f"/bike/{bike_id}", status_code=303)
+
+# 10. Strava Webhook Verification (GET)
+# Strava sends GET request with hub.mode, hub.challenge, hub.verify_token upon subscription registration
+@app.get("/webhook/strava")
+async def strava_webhook_validate(request: Request):
+    mode = request.query_params.get("hub.mode")
+    challenge = request.query_params.get("hub.challenge")
+    verify_token = request.query_params.get("hub.verify_token")
+
+    if mode == "subscribe" and verify_token == STRAVA_WEBHOOK_VERIFY_TOKEN:
+        return {"hub.challenge": challenge}
+
+    raise HTTPException(status_code=403, detail="Invalid verification token or mode")
+
+# 11. Strava Webhook Event Handler (POST)
+# Strava pushes event payloads here when an activity is created, updated or deleted
+@app.post("/webhook/strava")
+async def strava_webhook_event(request: Request, db: AsyncSession = Depends(get_db)):
+    payload = await request.json()
+    # Strava webhook schema:
+    # {
+    #   "aspect_type": "create" | "update" | "delete",
+    #   "event_time": 1549560669,
+    #   "object_id": 1234567890,   (activity_id)
+    #   "object_type": "activity" | "athlete",
+    #   "owner_id": 9999999,        (athlete_id)
+    #   "subscription_id": 1,
+    #   "updates": {}
+    # }
+    object_type = payload.get("object_type")
+    aspect_type = payload.get("aspect_type")
+    activity_id = payload.get("object_id")
+    athlete_id = payload.get("owner_id")
+
+    if object_type == "activity" and aspect_type == "create" and activity_id and athlete_id:
+        res = await db.execute(select(User).where(User.strava_id == athlete_id))
+        user = res.scalar_one_or_none()
+        if user:
+            try:
+                await process_single_activity(user, activity_id, db)
+            except Exception as e:
+                print(f"[Webhook] Error processing activity {activity_id}: {e}")
+
+    # Strava expects quick HTTP 200 acknowledge (within 2 seconds)
+    return {"status": "ok"}
+

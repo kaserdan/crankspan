@@ -191,3 +191,66 @@ async def sync_recent_activities(user: User, db: AsyncSession, limit: int = 30) 
 
     await db.commit()
     return processed_count
+
+async def process_single_activity(user: User, activity_id: int, db: AsyncSession) -> bool:
+    """Fetch a single activity by ID and process wear & tear for its bike components."""
+    # Check if already processed
+    res = await db.execute(select(ProcessedActivity).where(ProcessedActivity.strava_activity_id == activity_id))
+    if res.scalar_one_or_none() is not None:
+        return False
+
+    token = await get_valid_access_token(user, db)
+    async with httpx.AsyncClient() as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = await client.get(f"{STRAVA_API_BASE}/activities/{activity_id}", headers=headers)
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        act = resp.json()
+
+    if act.get("type") not in ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"]:
+        return False
+
+    gear_id = act.get("gear_id")
+    dist_km = round(act.get("distance", 0) / 1000.0, 2)
+    moving_hours = round(act.get("moving_time", 0) / 3600.0, 2)
+    elevation_m = round(act.get("total_elevation_gain", 0.0), 1)
+
+    start_date_str = act.get("start_date")
+    if start_date_str:
+        act_date = datetime.fromisoformat(start_date_str.replace("Z", "+00:00"))
+    else:
+        act_date = datetime.now(timezone.utc)
+
+    bike = None
+    if gear_id:
+        res_bike = await db.execute(select(Bike).where(Bike.strava_gear_id == gear_id, Bike.user_id == user.id))
+        bike = res_bike.scalar_one_or_none()
+
+    if bike:
+        # Also ensure bike's total_distance_km stays updated
+        bike.total_distance_km = round(bike.total_distance_km + dist_km, 2)
+
+        # Update active components on this bike
+        res_comps = await db.execute(select(Component).where(Component.bike_id == bike.id, Component.status == "active"))
+        components = res_comps.scalars().all()
+
+        for comp in components:
+            comp.current_distance_km = round(comp.current_distance_km + dist_km, 2)
+            comp.current_time_hours = round(comp.current_time_hours + moving_hours, 2)
+            if comp.current_distance_km >= comp.max_distance_km:
+                comp.status = "needs_service"
+
+    summary = ProcessedActivity(
+        strava_activity_id=activity_id,
+        user_id=user.id,
+        bike_id=bike.id if bike else None,
+        distance_km=dist_km,
+        moving_time_hours=moving_hours,
+        elevation_gain_m=elevation_m,
+        activity_date=act_date,
+    )
+    db.add(summary)
+    await db.commit()
+    return True
+
