@@ -43,7 +43,7 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 async def index(request: Request, user: User | None = Depends(get_current_user)):
     if user:
         return RedirectResponse(url="/dashboard", status_code=303)
-    return templates.TemplateResponse("index.html", {"request": request, "user": None})
+    return templates.TemplateResponse(request=request, name="index.html", context={"user": None})
 
 # 1. OAuth Initiate: redirect to Strava
 @app.get("/auth/strava/login")
@@ -135,8 +135,7 @@ async def dashboard(request: Request, user: User | None = Depends(get_current_us
     )
     bikes = res.scalars().all()
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "user": user,
         "bikes": bikes,
     })
@@ -156,8 +155,7 @@ async def bike_detail(bike_id: int, request: Request, user: User | None = Depend
     if not bike:
         raise HTTPException(status_code=404, detail="Kolo nebylo nalezeno")
 
-    return templates.TemplateResponse("bike.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="bike.html", context={
         "user": user,
         "bike": bike,
     })
