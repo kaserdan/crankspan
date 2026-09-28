@@ -29,8 +29,8 @@
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-xl font-bold text-white">Komponenty & Opotřebení</h2>
-      <button onclick="document.getElementById('new-comp-modal').classList.toggle('hidden')" 
-              class="text-xs font-semibold px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition">
+      <button onclick="document.getElementById('new-comp-modal').classList.remove('hidden')" 
+              class="text-xs font-semibold px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition shadow-sm">
         + Přidat novou komponentu
       </button>
     </div>
@@ -64,21 +64,43 @@
                 <div class="h-full transition-all duration-300 {% if pct >= 100 %}bg-red-500{% elif pct >= 80 %}bg-amber-400{% else %}bg-emerald-500{% endif %}" 
                      style="width: {{ [pct, 100]|min }}%"></div>
               </div>
-              {% if comp.current_time_hours > 0 %}
-                <span class="text-xs text-slate-500 mt-1 block">Čas v provozu: {{ "%.1f"|format(comp.current_time_hours) }} h</span>
+              
+              <div class="flex flex-wrap items-center justify-between text-xs text-slate-500 mt-2 gap-y-1">
+                <div>
+                  {% if comp.installed_at %}
+                    <span>📅 Nasazeno: <strong class="text-slate-400 font-medium">{{ comp.installed_at.strftime('%d.%m.%Y') }}</strong></span>
+                  {% else %}
+                    <span>📅 Datum nezadáno</span>
+                  {% endif %}
+                </div>
+                {% if comp.current_time_hours and comp.current_time_hours > 0 %}
+                  <span>⏱️ {{ "%.1f"|format(comp.current_time_hours) }} h</span>
+                {% endif %}
+              </div>
+              {% if comp.notes %}
+                <p class="text-xs text-slate-400 bg-slate-950/60 rounded px-2.5 py-1.5 mt-2 border border-slate-800/60 italic">
+                  {{ comp.notes }}
+                </p>
               {% endif %}
             </div>
           </div>
 
-          <!-- Actions: Reset / Service / Delete -->
+          <!-- Actions: Edit / Reset / Delete -->
           <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
-            <form action="/component/{{ comp.id }}/reset" method="post" onsubmit="return confirm('Opravdu resetovat ujeté km (např. po nasazení nového dílu)?');">
-              <button type="submit" class="text-emerald-400 hover:text-emerald-300 font-medium">
-                ↺ Označit jako vyměněné (Reset km)
+            <div class="flex items-center space-x-3">
+              <button type="button" 
+                      onclick="openEditModal('{{ comp.id }}', '{{ comp.name|e }}', '{{ comp.category }}', '{{ comp.max_distance_km }}', '{{ comp.current_distance_km }}', '{{ comp.installed_at.strftime('%Y-%m-%d') if comp.installed_at else '' }}', '{{ (comp.notes or '')|e }}')" 
+                      class="text-orange-400 hover:text-orange-300 font-medium transition">
+                ✏️ Upravit
               </button>
-            </form>
+              <form action="/component/{{ comp.id }}/reset" method="post" onsubmit="return confirm('Opravdu resetovat ujeté km na 0 a nastavit dnešek jako datum výměny?');">
+                <button type="submit" class="text-emerald-400 hover:text-emerald-300 font-medium transition">
+                  ↺ Vyměněno dnes
+                </button>
+              </form>
+            </div>
             <form action="/component/{{ comp.id }}/delete" method="post" onsubmit="return confirm('Smazat tuto komponentu?');">
-              <button type="submit" class="text-slate-500 hover:text-red-400">
+              <button type="submit" class="text-slate-500 hover:text-red-400 transition">
                 Smazat
               </button>
             </form>
@@ -102,34 +124,121 @@
           <input type="text" name="name" required placeholder="Např. Shimano XT Řetěz M8100" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
         </div>
 
-        <div>
-          <label class="block text-xs font-medium text-slate-300 mb-1">Kategorie</label>
-          <select name="category" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
-            <option value="chain">Řetěz</option>
-            <option value="tire">Plášť</option>
-            <option value="cassette">Kazeta</option>
-            <option value="brakes">Brzdové destičky / kotouče</option>
-            <option value="suspension">Vidlice / Tlumič</option>
-            <option value="other">Jiné</option>
-          </select>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Kategorie</label>
+            <select name="category" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+              <option value="chain">Řetěz</option>
+              <option value="tire">Plášť</option>
+              <option value="cassette">Kazeta</option>
+              <option value="brakes">Brzdové destičky / kotouče</option>
+              <option value="suspension">Vidlice / Tlumič</option>
+              <option value="other">Jiné</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Datum nasazení</label>
+            <input type="date" name="installed_at" id="new-comp-date" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Limit (km)</label>
+            <input type="number" step="100" name="max_distance_km" required value="3000" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Již najeto (km)</label>
+            <input type="number" step="1" name="initial_distance_km" value="0" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-slate-300 mb-1">Životnost / Limit (km)</label>
-          <input type="number" step="100" name="max_distance_km" required value="3000" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
-        </div>
-
-        <div>
-          <label class="block text-xs font-medium text-slate-300 mb-1">Aktuálně najeto na tomto dílu (km)</label>
-          <input type="number" step="10" name="initial_distance_km" value="0" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          <label class="block text-xs font-medium text-slate-300 mb-1">Poznámka (volitelné)</label>
+          <input type="text" name="notes" placeholder="Např. voskováno Silca, 116 článků" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
         </div>
 
         <div class="flex justify-end space-x-3 pt-3">
           <button type="button" onclick="document.getElementById('new-comp-modal').classList.add('hidden')" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white">Zrušit</button>
-          <button type="submit" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium rounded-lg">Uložit komponentu</button>
+          <button type="submit" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium rounded-lg shadow-sm">Uložit komponentu</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal for Editing Component -->
+  <div id="edit-comp-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-bold text-white">Upravit komponentu</h3>
+        <button onclick="document.getElementById('edit-comp-modal').classList.add('hidden')" class="text-slate-400 hover:text-white">✕</button>
+      </div>
+
+      <form id="edit-comp-form" action="" method="post" class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Název dílu</label>
+          <input type="text" id="edit-name" name="name" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Kategorie</label>
+            <select id="edit-category" name="category" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+              <option value="chain">Řetěz</option>
+              <option value="tire">Plášť</option>
+              <option value="cassette">Kazeta</option>
+              <option value="brakes">Brzdové destičky / kotouče</option>
+              <option value="suspension">Vidlice / Tlumič</option>
+              <option value="other">Jiné</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Datum nasazení</label>
+            <input type="date" id="edit-installed-at" name="installed_at" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Limit (km)</label>
+            <input type="number" step="100" id="edit-max-distance" name="max_distance_km" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Aktuálně najeto (km)</label>
+            <input type="number" step="0.1" id="edit-current-distance" name="current_distance_km" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Poznámka (volitelné)</label>
+          <input type="text" id="edit-notes" name="notes" placeholder="Např. voskováno Silca, 116 článků" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500">
+        </div>
+
+        <div class="flex justify-end space-x-3 pt-3">
+          <button type="button" onclick="document.getElementById('edit-comp-modal').classList.add('hidden')" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white">Zrušit</button>
+          <button type="submit" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium rounded-lg shadow-sm">Uložit změny</button>
         </div>
       </form>
     </div>
   </div>
 </div>
+
+<script>
+  // Set default today for new component modal
+  const today = new Date().toISOString().split('T')[0];
+  const newDateEl = document.getElementById('new-comp-date');
+  if (newDateEl) newDateEl.value = today;
+
+  function openEditModal(id, name, category, maxKm, currKm, installedAt, notes) {
+    const form = document.getElementById('edit-comp-form');
+    form.action = `/component/${id}/update`;
+    document.getElementById('edit-name').value = name;
+    document.getElementById('edit-category').value = category;
+    document.getElementById('edit-max-distance').value = maxKm;
+    document.getElementById('edit-current-distance').value = currKm;
+    document.getElementById('edit-installed-at').value = installedAt || today;
+    document.getElementById('edit-notes').value = notes || '';
+    document.getElementById('edit-comp-modal').classList.remove('hidden');
+  }
+</script>
 {% endblock %}

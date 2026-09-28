@@ -178,6 +178,8 @@ async def add_component(
     category: str = Form(...),
     max_distance_km: float = Form(3000.0),
     initial_distance_km: float = Form(0.0),
+    installed_at: str | None = Form(None),
+    notes: str | None = Form(None),
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -189,21 +191,80 @@ async def add_component(
     if not bike:
         raise HTTPException(status_code=404, detail="Kolo nebylo nalezeno")
 
+    install_dt = datetime.now(timezone.utc)
+    if installed_at:
+        try:
+            install_dt = datetime.fromisoformat(installed_at).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
     comp = Component(
         bike_id=bike.id,
         name=name,
         category=category,
         max_distance_km=max_distance_km,
         current_distance_km=initial_distance_km,
+        installed_at=install_dt,
+        notes=notes if notes else None,
         status="active" if initial_distance_km < max_distance_km else "needs_service"
     )
     db.add(comp)
     await db.commit()
     return RedirectResponse(url=f"/bike/{bike_id}", status_code=303)
 
-# 7. Reset component mileage (e.g. after replacing a chain)
+# 7. Update component
+@app.post("/component/{comp_id}/update")
+async def update_component(
+    comp_id: int,
+    name: str = Form(...),
+    category: str = Form(...),
+    max_distance_km: float = Form(...),
+    current_distance_km: float = Form(...),
+    installed_at: str | None = Form(None),
+    notes: str | None = Form(None),
+    user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if not user:
+        return RedirectResponse(url="/", status_code=303)
+
+    res = await db.execute(
+        select(Component)
+        .join(Bike)
+        .where(Component.id == comp_id, Bike.user_id == user.id)
+    )
+    comp = res.scalar_one_or_none()
+    if not comp:
+        raise HTTPException(status_code=404, detail="Komponenta nenalezena")
+
+    comp.name = name
+    comp.category = category
+    comp.max_distance_km = max_distance_km
+    comp.current_distance_km = current_distance_km
+    comp.notes = notes if notes else None
+
+    if installed_at:
+        try:
+            comp.installed_at = datetime.fromisoformat(installed_at).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    if comp.current_distance_km >= comp.max_distance_km:
+        comp.status = "needs_service"
+    else:
+        comp.status = "active"
+
+    await db.commit()
+    return RedirectResponse(url=f"/bike/{comp.bike_id}", status_code=303)
+
+# 8. Reset component mileage (e.g. after replacing a chain)
 @app.post("/component/{comp_id}/reset")
-async def reset_component(comp_id: int, user: User | None = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def reset_component(
+    comp_id: int,
+    installed_at: str | None = Form(None),
+    user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     if not user:
         return RedirectResponse(url="/", status_code=303)
 
@@ -219,11 +280,19 @@ async def reset_component(comp_id: int, user: User | None = Depends(get_current_
     comp.current_distance_km = 0.0
     comp.current_time_hours = 0.0
     comp.status = "active"
+    if installed_at:
+        try:
+            comp.installed_at = datetime.fromisoformat(installed_at).replace(tzinfo=timezone.utc)
+        except ValueError:
+            comp.installed_at = datetime.now(timezone.utc)
+    else:
+        comp.installed_at = datetime.now(timezone.utc)
+
     await db.commit()
 
     return RedirectResponse(url=f"/bike/{comp.bike_id}", status_code=303)
 
-# 8. Delete component
+# 9. Delete component
 @app.post("/component/{comp_id}/delete")
 async def delete_component(comp_id: int, user: User | None = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user:
