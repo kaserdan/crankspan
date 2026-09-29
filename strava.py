@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models import User, Bike, Component, ProcessedActivity
 from config import STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET
+from crypto import encrypt_value, decrypt_value
 
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
 STRAVA_OAUTH_TOKEN_URL = "https://www.strava.com/oauth/token"
@@ -35,12 +36,13 @@ async def exchange_code_for_token(code: str) -> dict:
         return resp.json()
 
 async def get_valid_access_token(user: User, db: AsyncSession) -> str:
-    """Check if access token is expired, refresh it if needed, and return valid token."""
+    """Check if access token is expired, refresh it if needed, and return valid plaintext token."""
     now_ts = int(time.time())
     if user.expires_at > now_ts + 120:
-        return user.access_token
+        return decrypt_value(user.access_token)
 
     # Token expired or about to expire -> refresh
+    raw_refresh_token = decrypt_value(user.refresh_token)
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             STRAVA_OAUTH_TOKEN_URL,
@@ -48,18 +50,18 @@ async def get_valid_access_token(user: User, db: AsyncSession) -> str:
                 "client_id": STRAVA_CLIENT_ID,
                 "client_secret": STRAVA_CLIENT_SECRET,
                 "grant_type": "refresh_token",
-                "refresh_token": user.refresh_token,
+                "refresh_token": raw_refresh_token,
             },
         )
         resp.raise_for_status()
         data = resp.json()
 
-        user.access_token = data["access_token"]
-        user.refresh_token = data["refresh_token"]
+        user.access_token = encrypt_value(data["access_token"])
+        user.refresh_token = encrypt_value(data["refresh_token"])
         user.expires_at = data["expires_at"]
         await db.commit()
         await db.refresh(user)
-        return user.access_token
+        return data["access_token"]
 
 async def sync_athlete_bikes(user: User, db: AsyncSession) -> list[Bike]:
     """Sync athlete profile and bikes (gear) from Strava."""

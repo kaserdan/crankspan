@@ -11,6 +11,8 @@ import os
 from models import init_db, async_session, User, Bike, Component
 from config import STRAVA_CLIENT_ID, APP_BASE_URL, STRAVA_WEBHOOK_VERIFY_TOKEN
 from strava import exchange_code_for_token, sync_athlete_bikes, sync_recent_activities, process_single_activity
+from crypto import encrypt_value, decrypt_value
+from security import create_session_token, verify_session_token, create_csrf_token, verify_csrf_token
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,19 +22,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Crankspan", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["get_csrf_token"] = create_csrf_token
 
 # Dependency for DB session
 async def get_db():
     async with async_session() as session:
         yield session
 
-# Helper to get current authenticated user from cookie session
+# Helper to get current authenticated user from signed session cookie
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> User | None:
-    user_id = request.cookies.get("crankspan_user_id")
+    session_token = request.cookies.get("crankspan_session")
+    user_id = verify_session_token(session_token)
     if not user_id:
         return None
     try:
-        res = await db.execute(select(User).where(User.id == int(user_id)))
+        res = await db.execute(select(User).where(User.id == user_id))
         return res.scalar_one_or_none()
     except Exception:
         return None
@@ -81,16 +85,16 @@ async def strava_callback(request: Request, code: str = None, error: str = None,
             firstname=athlete_info.get("firstname"),
             lastname=athlete_info.get("lastname"),
             profile_picture=athlete_info.get("profile_medium") or athlete_info.get("profile"),
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
+            access_token=encrypt_value(data["access_token"]),
+            refresh_token=encrypt_value(data["refresh_token"]),
             expires_at=data["expires_at"],
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
     else:
-        user.access_token = data["access_token"]
-        user.refresh_token = data["refresh_token"]
+        user.access_token = encrypt_value(data["access_token"])
+        user.refresh_token = encrypt_value(data["refresh_token"])
         user.expires_at = data["expires_at"]
         user.firstname = athlete_info.get("firstname") or user.firstname
         user.lastname = athlete_info.get("lastname") or user.lastname
@@ -104,20 +108,26 @@ async def strava_callback(request: Request, code: str = None, error: str = None,
     except Exception as e:
         print(f"Warning during initial sync: {e}")
 
-    # Set auth cookie & redirect to dashboard
+    # Set cryptographically signed session cookie & redirect to dashboard
     response = RedirectResponse(url="/dashboard", status_code=303)
+    signed_session = create_session_token(user.id)
+    is_secure = APP_BASE_URL.startswith("https")
     response.set_cookie(
-        key="crankspan_user_id",
-        value=str(user.id),
+        key="crankspan_session",
+        value=signed_session,
         httponly=True,
+        secure=is_secure,
         max_age=365 * 24 * 3600,
         samesite="lax",
     )
+    # Remove obsolete legacy cookie if present
+    response.delete_cookie("crankspan_user_id")
     return response
 
 @app.get("/logout")
 async def logout():
     response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie("crankspan_session")
     response.delete_cookie("crankspan_user_id")
     return response
 
@@ -162,9 +172,15 @@ async def bike_detail(bike_id: int, request: Request, user: User | None = Depend
 
 # 5. Manual Sync trigger
 @app.post("/sync")
-async def sync_data(user: User | None = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def sync_data(
+    csrf_token: str = Form(""),
+    user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     if not user:
         return RedirectResponse(url="/", status_code=303)
+    if not verify_csrf_token(user.id, csrf_token):
+        raise HTTPException(status_code=403, detail="Neplatný bezpečnostní CSRF token")
 
     await sync_athlete_bikes(user, db)
     await sync_recent_activities(user, db, limit=50)
@@ -180,11 +196,14 @@ async def add_component(
     initial_distance_km: float = Form(0.0),
     installed_at: str | None = Form(None),
     notes: str | None = Form(None),
+    csrf_token: str = Form(""),
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     if not user:
         return RedirectResponse(url="/", status_code=303)
+    if not verify_csrf_token(user.id, csrf_token):
+        raise HTTPException(status_code=403, detail="Neplatný bezpečnostní CSRF token")
 
     res = await db.execute(select(Bike).where(Bike.id == bike_id, Bike.user_id == user.id))
     bike = res.scalar_one_or_none()
@@ -222,11 +241,14 @@ async def update_component(
     current_distance_km: float = Form(...),
     installed_at: str | None = Form(None),
     notes: str | None = Form(None),
+    csrf_token: str = Form(""),
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     if not user:
         return RedirectResponse(url="/", status_code=303)
+    if not verify_csrf_token(user.id, csrf_token):
+        raise HTTPException(status_code=403, detail="Neplatný bezpečnostní CSRF token")
 
     res = await db.execute(
         select(Component)
@@ -262,11 +284,14 @@ async def update_component(
 async def reset_component(
     comp_id: int,
     installed_at: str | None = Form(None),
+    csrf_token: str = Form(""),
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     if not user:
         return RedirectResponse(url="/", status_code=303)
+    if not verify_csrf_token(user.id, csrf_token):
+        raise HTTPException(status_code=403, detail="Neplatný bezpečnostní CSRF token")
 
     res = await db.execute(
         select(Component)
@@ -294,7 +319,16 @@ async def reset_component(
 
 # 9. Delete component
 @app.post("/component/{comp_id}/delete")
-async def delete_component(comp_id: int, user: User | None = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def delete_component(
+    comp_id: int,
+    csrf_token: str = Form(""),
+    user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if not user:
+        return RedirectResponse(url="/", status_code=303)
+    if not verify_csrf_token(user.id, csrf_token):
+        raise HTTPException(status_code=403, detail="Neplatný bezpečnostní CSRF token")
     if not user:
         return RedirectResponse(url="/", status_code=303)
 
@@ -347,7 +381,7 @@ async def strava_webhook_event(request: Request, db: AsyncSession = Depends(get_
     athlete_id = payload.get("owner_id")
 
     if object_type == "activity" and aspect_type == "create" and activity_id and athlete_id:
-        res = await db.execute(select(User).where(User.strava_id == athlete_id))
+        res = await db.execute(select(User).where(User.strava_athlete_id == athlete_id))
         user = res.scalar_one_or_none()
         if user:
             try:
